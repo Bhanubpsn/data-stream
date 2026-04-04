@@ -1,2 +1,7 @@
 *.env
 *.mp4
+*.pb.go
+*.pb.cc
+*.pb.h
+.vscode/
+reflector
