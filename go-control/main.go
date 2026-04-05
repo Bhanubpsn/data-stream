@@ -34,35 +34,43 @@ func main() {
 
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
-		fmt.Print("Add IP >> ")
+		fmt.Print("Command (add/kick/exit) [IP] >> ")
 		if !scanner.Scan() {
 			break
 		}
 
-		input := strings.TrimSpace(scanner.Text())
-
-		if input == "exit" {
-			break
-		}
-
-		if input == "" {
+		parts := strings.Fields(scanner.Text())
+		if len(parts) == 0 {
 			continue
 		}
 
-		//Send the RPC Command to C++
+		command := strings.ToLower(parts[0])
+
+		if command == "exit" {
+			break
+		}
+		if len(parts) < 2 {
+			fmt.Println(" [!] Usage: add 192.168.x.x or kick 192.168.x.x")
+			continue
+		}
+
+		ip := parts[1]
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		response, err := client.AddSubscriber(ctx, &pb.SubscriberRequest{
-			IpAddress: input,
-			Port:      6001, //standard port for video streaming humari videos
-		})
+
+		var resp *pb.StatusResponse
+		var err error
+
+		if command == "add" {
+			resp, err = client.AddSubscriber(ctx, &pb.SubscriberRequest{IpAddress: ip, Port: 6001})
+		} else if command == "kick" {
+			resp, err = client.RemoveSubscriber(ctx, &pb.SubscriberRequest{IpAddress: ip, Port: 6001})
+		}
 		cancel()
 
 		if err != nil {
-			fmt.Printf(" [!] Error: Could not reach C++ Engine: %v\n", err)
-		} else if response.Success {
-			fmt.Printf(" [+] Success: %s is now receiving the stream!\n", input)
+			fmt.Printf(" [!] gRPC Error: %v\n", err)
 		} else {
-			fmt.Printf(" [-] Failed: %s\n", response.Message)
+			fmt.Printf(" [*] Response: %s\n", resp.Message)
 		}
 	}
 }

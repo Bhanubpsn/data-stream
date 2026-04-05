@@ -48,9 +48,32 @@ class StreamServiceImpl final : public StreamController::Service {
         lock_guard<mutex> lock(sub_mutex);
         subscribers.push_back({sa, request->ip_address()});
         
-        cout << ">>> Control Plane added: " << request->ip_address() << ":" << request->port() << endl;
+        cout << ">>> [Control Plane] ADDED: " << request->ip_address() << ":" << request->port() << endl;
         reply->set_message("Subscriber added successfully");
         reply->set_success(true);
+        return grpc::Status::OK;
+    }
+
+    grpc::Status RemoveSubscriber(grpc::ServerContext* context, const stream::SubscriberRequest* request, stream::StatusResponse* reply) override {
+        lock_guard<mutex> lock(sub_mutex);
+        
+        string target_ip = request->ip_address();
+        int target_port = request->port();
+
+        auto it = std::remove_if(subscribers.begin(), subscribers.end(), [&](const Subscriber& s) {
+            return s.ip == target_ip && ntohs(s.addr.sin_port) == target_port;
+        });
+
+        if (it != subscribers.end()) {
+            subscribers.erase(it, subscribers.end());
+            cout << ">>> [Control Plane] KICKED: " << target_ip << endl;
+            reply->set_success(true);
+            reply->set_message("Subscriber removed");
+        } else {
+            reply->set_success(false);
+            reply->set_message("IP not found in list");
+        }
+        
         return grpc::Status::OK;
     }
 };
