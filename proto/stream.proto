@@ -4,10 +4,10 @@ option go_package = "./pb";
 package stream;
 
 service StreamController {
-  // Go tells C++: "Add this Phone's IP to your list"
+  // Go tells C++: "Add this device IP to the list"
   rpc AddSubscriber (SubscriberRequest) returns (StatusResponse) {}
   
-  // Go tells C++: "Remove this Phone's IP"
+  // Go tells C++: "Remove this device IP"
   rpc RemoveSubscriber (SubscriberRequest) returns (StatusResponse) {}
 }
 
