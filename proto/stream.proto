@@ -9,6 +9,9 @@ service StreamController {
   
   // Go tells C++: "Remove this device IP"
   rpc RemoveSubscriber (SubscriberRequest) returns (StatusResponse) {}
+
+  // Go tells to update the quility of the streaming
+  rpc SetQuality (QualityRequest) returns (StatusResponse) {}
 }
 
 message SubscriberRequest {
@@ -20,3 +23,9 @@ message StatusResponse {
   bool success = 1;
   string message = 2;
 }
+
+message QualityRequest {
+  string ip_address = 1;
+  int32 quality_level = 2; // 0=High, 1=Mid, 2=Low
+}
+

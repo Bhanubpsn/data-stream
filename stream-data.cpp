@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <mutex>
 #include <thread>
+#include <poll.h>
 #include <grpcpp/grpcpp.h>
 #include "stream.grpc.pb.h"
 
@@ -21,11 +22,16 @@ using namespace std;
 #define PORT 5005         // The port server listens on
 #define BUFFER_SIZE 65535 // Max size of a UDP packet mtlab 65535 bytes k packets can be sent
 
+//Quality levels for video streaming
+enum Quality { HIGH = 0, MID = 1, LOW = 2 };
+
 // Jo stream krega
 struct Subscriber {
     struct sockaddr_in addr;
     string ip;
+    Quality current_quality;
 };
+
 
 vector<Subscriber> subscribers;
 mutex sub_mutex;
@@ -46,7 +52,11 @@ class StreamServiceImpl final : public StreamController::Service {
         }
 
         lock_guard<mutex> lock(sub_mutex);
-        subscribers.push_back({sa, request->ip_address()});
+        Subscriber new_sub;
+        new_sub.addr = sa;
+        new_sub.ip = request->ip_address();
+        new_sub.current_quality = HIGH; // Default quality level
+        subscribers.push_back(new_sub);
         
         cout << ">>> [Control Plane] ADDED: " << request->ip_address() << ":" << request->port() << endl;
         reply->set_message("Subscriber added successfully");
@@ -76,42 +86,71 @@ class StreamServiceImpl final : public StreamController::Service {
         
         return grpc::Status::OK;
     }
+
+    grpc::Status SetQuality(ServerContext* context, const stream::QualityRequest* request, stream::StatusResponse* reply) override {
+        lock_guard<mutex> lock(sub_mutex);
+        bool found = false;
+        
+        for (auto& sub : subscribers) {
+            if (sub.ip == request->ip_address()) {
+                sub.current_quality = (Quality)request->quality_level();
+                found = true;
+                break;
+            }
+        }
+
+        if (found) {
+            reply->set_success(true);
+            reply->set_message("Switched to quality level " + to_string(request->quality_level()));
+            cout << ">>> [Control Plane] Switched " << request->ip_address() << " to Level " << request->quality_level() << endl;
+        } else {
+            reply->set_success(false);
+            reply->set_message("Subscriber not found");
+        }
+        return grpc::Status::OK;
+    }
 };
 
 void run_udp_engine() {
-    int sockfd;
-    char buffer[BUFFER_SIZE];
-    struct sockaddr_in serverAddress, clientAddress;
+    int ports[] = {5005, 5006, 5007};
+    int sockets[3];
+    struct pollfd fds[3];
 
     // Creating a UDP Socket
     // Which is alos called Socket Descriptor
     // It is an integer that uniquely identifies the socket in the operating system (kernal) very similar to file descriptors
 
-    // AF_INET: This specifies that we are using the IPv4 address family the usual 198.168.x.x
-    // SOCK_DGRAM: This indicates that we want to create a datagram socket which is used for UDP communication
-    // For TCP its SOCK_STREAM
-    // 0 : This is the protocol field. For UDP we can set it to 0 to let the system choose the appropriate protocol (which will be IPPROTO_UDP)
-    if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
-        perror("socket creation failed");
-        exit(EXIT_FAILURE);
+    for (int i = 0; i < 3; i++) {
+        sockets[i] = socket(AF_INET, SOCK_DGRAM, 0);
+        struct sockaddr_in addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(ports[i]);    // htons converts the port number from host byte order to network byte order (big-endian) which is required for network communication
+                                            // big-endian mtalab MSB phele store hogi then LSB, left to right padhne k liye
+        addr.sin_addr.s_addr = INADDR_ANY;  // Listen on ALL available network interfaces
+       // Bind the socket to the port, saara traffic jo is port pe aayega wo is socket pe receive hoga
+        if (::bind(sockets[i], (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+            perror("bind failed");
+            exit(EXIT_FAILURE);
+        }
+
+        int broadcastEnable = 1;
+        if (setsockopt(sockets[i], SOL_SOCKET, SO_BROADCAST, &broadcastEnable, sizeof(broadcastEnable)) < 0) {
+            perror("setsockopt failed");
+            exit(EXIT_FAILURE);
+        }
+
+        // AF_INET: This specifies that we are using the IPv4 address family the usual 198.168.x.x
+        // SOCK_DGRAM: This indicates that we want to create a datagram socket which is used for UDP communication
+        // For TCP its SOCK_STREAM
+        // 0 : This is the protocol field. For UDP we can set it to 0 to let the system choose the appropriate protocol (which will be IPPROTO_UDP)
+    
+
+        fds[i].fd = sockets[i];
+        fds[i].events = POLLIN; // Tell poll to watch for INCOMING data
     }
 
-    int broadcastEnable = 1;
-    if (setsockopt(sockfd, SOL_SOCKET, SO_BROADCAST, &broadcastEnable, sizeof(broadcastEnable)) < 0) {
-        perror("setsockopt failed");
-        exit(EXIT_FAILURE);
-    }
-
-    serverAddress.sin_family = AF_INET;
-    serverAddress.sin_addr.s_addr = INADDR_ANY; // Listen on ALL available network interfaces
-    serverAddress.sin_port = htons(PORT);       // htons converts the port number from host byte order to network byte order (big-endian) which is required for network communication
-                                                // big-endian mtalab MSB phele store hogi then LSB, left to right padhne k liye
-
-    // Bind the socket to the port, saara traffic jo is port pe aayega wo is socket pe receive hoga
-    if (::bind(sockfd, (const struct sockaddr *)&serverAddress, sizeof(serverAddress)) < 0) {
-        perror("bind failed");
-        exit(EXIT_FAILURE);
-    }
+    char buffer[BUFFER_SIZE];
 
     // Define our "Subscribers" (for testing, send to ports 6001 and 6002)
     // Jaha pe video data receive karna hai, matlab subscriber ke address aur port number define karna hai
@@ -127,36 +166,47 @@ void run_udp_engine() {
     // inet_pton(AF_INET, "192.168.15.255", &sub1.sin_addr); // Agar broadcast karna hai toh using router etc.
     // localhost pe hi dono subscribers hain, agar alag machines pe hote to unka IP address yaha specify karna padta
 
-    cout << ">>> [Data Plane] UDP Reflector active on port " << PORT << endl;
+    cout << ">>> [Data Plane] UDP Reflector active on port High Quality " << ports[0] << endl;
+    cout << ">>> [Data Plane] UDP Reflector active on port Medium Quality " << ports[1] << endl;
+    cout << ">>> [Data Plane] UDP Reflector active on port Low Quality " << ports[2] << endl;
 
     while (true) {   
-        // int count = 0;
-        socklen_t len = sizeof(clientAddress);
+        int ret = poll(fds, 3, -1); 
+        if (ret <= 0) continue;
+
         // Receive packet
-        int n = recvfrom(sockfd, (char *)buffer, BUFFER_SIZE, 0, (struct sockaddr *)&clientAddress, &len);
+        for (int i = 0; i < 3; i++) {
+            if (fds[i].revents & POLLIN) {
+                struct sockaddr_in clientAddr;
+                socklen_t clen = sizeof(clientAddr);
+                int n = recvfrom(sockets[i], buffer, BUFFER_SIZE, 0, (struct sockaddr *)&clientAddr, &clen);
+                
+                if (n > 0) {
+                    lock_guard<mutex> lock(sub_mutex);
+                    //This is the dynamic way to add subscribers using gRPC, jaha pe subscribers ka list maintain karte hain aur usme naye subscribers add karte hain jab bhi gRPC call aati hai
+                    for (const auto& sub : subscribers) {
+                        // THE ABR MAGIC: Only send if the quality matches the port
+                        // Port 5005 (i=0) goes to HIGH (0)
+                        // Port 5006 (i=1) goes to MID (1)
+                        // Port 5007 (i=2) goes to LOW (2)
+                        if ((int)sub.current_quality == i) {
+                            sendto(sockets[i], buffer, n, 0, (struct sockaddr *)&sub.addr, sizeof(sub.addr));
+                        }
+                    }
+                }
+            }
+        }
 
         // Forward the packet to subscribers clone karke 
         
         //Below is the manual way to add the subscribers
         // sendto(sockfd, buffer, n, 0, (struct sockaddr *)&sub1, sizeof(sub1));
         // sendto(sockfd, buffer, n, 0, (struct sockaddr *)&sub2, sizeof(sub2));
-
-        //This is the dynamic way to add subscribers using gRPC, jaha pe subscribers ka list maintain karte hain aur usme naye subscribers add karte hain jab bhi gRPC call aati hai
-        if (n > 0) {
-            // std::cout << "Relaying " << n << " bytes to " << subscribers.size() << " subs" << std::endl;
-            std::lock_guard<std::mutex> lock(sub_mutex);
-            for (const auto& sub : subscribers) {
-                ssize_t sent = sendto(sockfd, buffer, n, 0, (struct sockaddr *)&sub.addr, sizeof(sub.addr));
-                if (sent < 0) {
-                    perror("sendto failed"); 
-                } else {
-                    // std::cout << "Successfully relayed " << sent << " bytes" << std::endl;
-                }
-            }
-        }
     }
 
-    close(sockfd);
+    for(int i=0; i<3; i++) {
+        close(sockets[i]);
+    }
 }
 
 int main() {

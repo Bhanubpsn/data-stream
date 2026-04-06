@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,7 +35,7 @@ func main() {
 
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
-		fmt.Print("Command (add/kick/exit) [IP] >> ")
+		fmt.Print("Command (add/kick/exit/quality) [IP] >> ")
 		if !scanner.Scan() {
 			break
 		}
@@ -50,7 +51,7 @@ func main() {
 			break
 		}
 		if len(parts) < 2 {
-			fmt.Println(" [!] Usage: add 192.168.x.x or kick 192.168.x.x")
+			fmt.Println(" [!] Usage: add 192.168.x.x or kick 192.168.x.x or quality 192.168.x.x [0/1/2]")
 			continue
 		}
 
@@ -64,6 +65,16 @@ func main() {
 			resp, err = client.AddSubscriber(ctx, &pb.SubscriberRequest{IpAddress: ip, Port: 6001})
 		} else if command == "kick" {
 			resp, err = client.RemoveSubscriber(ctx, &pb.SubscriberRequest{IpAddress: ip, Port: 6001})
+		} else if command == "quality" {
+			if len(parts) < 3 {
+				fmt.Println("Usage: quality [IP] [0/1/2]")
+				continue
+			}
+			level, _ := strconv.Atoi(parts[2])
+			resp, err = client.SetQuality(ctx, &pb.QualityRequest{
+				IpAddress:    ip,
+				QualityLevel: int32(level),
+			})
 		}
 		cancel()
 
